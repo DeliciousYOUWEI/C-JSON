@@ -121,7 +121,7 @@ static int lept_prase_string(lept_value* value, json_context* context) {
 		case '\"':
 			//如果到了下一个\"了，这个双引号就不用往里面放了，直接开始将栈中的信息转存进用户的目标结构体中，然后释放资源退出
 			context->json++;  // 跳过最后的一个双引号
-
+			
 			value->type = LEPT_STRING;
 			value->u.str.len = 0;
 			value->u.str.s = NULL;  // 为了不让这个s指针是野指针（野指针不能直接free），需要在实际使用前先让这个指针指向某些区域,NULL也行，malloc(1)也行但最好是NULL。
@@ -156,14 +156,14 @@ static int lept_prase_array(lept_value* value, json_context* context) {
 		if (ret == LEPT_OK) {
 			*(lept_value*)get_point(context, sizeof(temp_value)) = temp_value;  // 把解析出来的临时value压入栈中
 			temp_len++;  // 只要成功解析了一个元素，就将当前数组的临时长度+1
-
+			
 			switch (*context->json) {
-			case(','):
+			case(','): 
 				context->json++;
 				lept_prase_whitespace(context);  // 把可能存在的空白解析掉
 
 				continue;  // 如果是逗号，就把这个逗号跳过，直接进行下一轮（下一轮里面会自己解析掉空格）
-			case(']'):
+			case(']'): 
 				context->json++;
 				lept_prase_whitespace(context);  // 处理当前json的结尾空格与】符
 				value->type = LEPT_ARRAY;
@@ -179,7 +179,7 @@ static int lept_prase_array(lept_value* value, json_context* context) {
 		}
 	}
 
-}
+	}
 
 
 static int lept_prase_value(lept_value* output, json_context* context) {
@@ -190,7 +190,7 @@ static int lept_prase_value(lept_value* output, json_context* context) {
 	case('\"'):return lept_prase_string(output, context);
 	case('['):return lept_prase_array(output, context);
 	default:return lept_prase_number(output, context);
-	}
+}
 }
 
 int lept_prase(lept_value* output, const char* inJson) {
