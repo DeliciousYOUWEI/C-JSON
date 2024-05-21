@@ -28,7 +28,7 @@ struct lept_value {
 	lept_type type;
 };
 
-struct lept_obj_value { 
+struct lept_obj_member {
 	char* member_key;
 	size_t key_len;
 	lept_value* member_value;

@@ -14,16 +14,26 @@ typedef struct {
 	size_t cur_len;  // 定义指针所指向的内存总长
 }json_context;
 
-// 栈与指针操作
+// ==================================================栈与指针操作=====================================================
+
+// 清空一个现有的value结构体下的内存（如果不具有下属内存就无需清理）
 void lept_free(lept_value* value) {
 
 	// 如果类型是三个不定长类，就释放内存，且重置相关变量。
-	if (value->type == LEPT_STRING) {
+	switch (value->type) {
+	case(LEPT_STRING):
 		value->u.str.len = 0;
-		free(value->u.str.s);  // 是这句free空间出错
-	}
-	else if (value->type == LEPT_ARRAY) {
-
+		free(value->u.str.s);  // 注意free不能free一个野指针，至少需要是NULL才能被free
+		return;
+	case(LEPT_ARRAY):
+		value->u.arr.elements_count = 0;
+		free(value->u.arr.a);  // 直接free这个指针能行吗？按理说这个指针下是存在总长的，总长里面就是全部的value结构体长度（而非只有指针的长度）
+		return;
+	case(LEPT_OBJECT):
+		value->u.obj.members_count = 0;
+		free(value->u.obj.m);
+		return;
+	default:return;
 	}
 }
 
@@ -57,8 +67,9 @@ static void* get_point(json_context* context, size_t ex_size) {
 		}
 	}
 }
+// ===================================================================================================================
 
-
+// ===================================================解析器部分======================================================
 static void lept_prase_whitespace(json_context* context) {
 	char* real_json_word = context->json;
 	// 注意所有的转义字符，其本质上在计算机内都是一个字符！
@@ -111,7 +122,6 @@ static int lept_prase_string(lept_value* value, json_context* context) {
 	// 保存当前的栈顶指针位置
 	size_t cur_top = context->top;
 
-
 	//前移一位去掉最前面的双引号。
 	context->json++;
 
@@ -154,7 +164,7 @@ static int lept_prase_array(lept_value* value, json_context* context) {
 		int ret = lept_prase_value(&temp_value, context);  // 把当前的这个元素解析出来存放在临时的temp_value中
 		// 如果成功解析了，则进入保存阶段
 		if (ret == LEPT_OK) {
-			*(lept_value*)get_point(context, sizeof(temp_value)) = temp_value;  // 把解析出来的临时value压入栈中
+			*(lept_value*)get_point(context, sizeof(temp_value)) = temp_value;  // 把解析出来的临时value压入栈中（注意这个操作是将“指针指向的那段区域的指针”的“值”赋值为了一个既有结构体。本质上是“A结构体”=“B结构体”，即使用一个结构体来赋值另一个结构体，这个并不是所有数据类型都支持这么操作，至少字符串不行）
 			temp_len++;  // 只要成功解析了一个元素，就将当前数组的临时长度+1
 			
 			switch (*context->json) {
@@ -181,14 +191,84 @@ static int lept_prase_array(lept_value* value, json_context* context) {
 
 	}
 
+static int lept_prase_object(lept_value* value, json_context* context) {
+	// 该解析函数同样需要公用栈，因此保存栈顶指针位置
+	size_t cur_top = context->cur_len;
+
+	// 定义并初始化一个临时的对象成员
+	lept_obj_member temp_member;
+	temp_member.member_key = NULL;
+	temp_member.key_len = 0;
+	temp_member.member_value = NULL;
+
+	// 定义一个临时value用于保存key的字符串信息。
+	lept_value temp_key;
+
+	// 定义返回值保存变量
+	int ret;
+
+	size_t temp_len = 0;
+
+	while (1) {
+		// 解析key
+		ret = lept_prase_string(&temp_key, context);
+		if (ret == LEPT_OK) {
+			lept_prase_whitespace(context);
+			if (*context->json == ':') {
+				context->json++;  // 跳过这个冒号
+				lept_prase_whitespace(context);  // 再次解析掉可能存在的空格
+				ret = lept_prase_value(&temp_member.member_value, context);
+				if (ret == LEPT_OK) {
+					// 如果值也成功解析，则该成员解析完毕，开始保存环节（这里必须是值复制，因为temp_key是复用的，不能直接用地址进行赋值）
+					free(temp_member.member_key);  // 先将（可能）原有的成员名释放掉
+					temp_member.member_key = (char*)malloc(temp_key.u.str.len);  // 重新分配内存
+					memcpy(temp_member.member_key, temp_key.u.str.s, temp_key.u.str.len);
+					temp_member.key_len = temp_key.u.str.len;
+
+					// 所有信息都已经保存进temp_member中，可以释放temp_key中的相关信息
+					// （lept_prase_string函数中会直接将这个char指针置为NULL，而char原本指向的内存是不会释放的，就会内存泄漏）
+					free(temp_key.u.str.s);
+
+					// 此时栈是干净的（所有要弹出的东西理论上已经都弹出了），因此开始将这个临时member压栈
+					*(lept_obj_member*)get_point(context, sizeof(lept_obj_member)) = temp_member;
+					temp_len++;
+
+					// 查看当前context中是“，”还是“}”，以此判断是否要继续循环
+					switch (*context->json) {
+					case(','):;
+					case(']'):;
+					}
+				}
+				else {
+					return LEPT_INVALID_VALUE;
+				}
+			}
+			else {
+				return LEPT_INVALID_VALUE;
+			}
+		}
+		else {
+			return LEPT_INVALID_VALUE;
+		}
+	}
+
+	return LEPT_OK;
+}
 
 static int lept_prase_value(lept_value* output, json_context* context) {
+	// 先将可能存在的下属内存释放，并将类型置为空
+	if (output->type != LEPT_NULL) {
+		lept_free(output);
+		output->type = LEPT_NULL;
+	}
+
 	switch (*context->json) {
 	case('n'):return lept_prase_null(output, context); // 这里因为直接就是return因此不需要再break了，否则一定要加break。
 	case('t'):return lept_prase_true(output, context);
 	case('f'):return lept_prase_false(output, context);
 	case('\"'):return lept_prase_string(output, context);
 	case('['):return lept_prase_array(output, context);
+	case('{'):return lept_prase_object(output, context);
 	default:return lept_prase_number(output, context);
 }
 }
@@ -212,7 +292,7 @@ int lept_prase(lept_value* output, const char* inJson) {
 
 	return ret;
 }
-
+// ======================================================================================================================
 
 
 lept_type lept_get_type(lept_value* value) {
